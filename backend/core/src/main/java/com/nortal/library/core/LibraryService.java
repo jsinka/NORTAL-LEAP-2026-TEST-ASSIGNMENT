@@ -29,8 +29,8 @@ public class LibraryService {
     if (!memberRepository.existsById(memberId)) {
       return Result.failure("MEMBER_NOT_FOUND");
     }
-    if (!canMemberBorrow(memberId)) {
-      return Result.failure("BORROW_LIMIT");
+    if (!memberHasLessLoansThanMaxAllowed(memberId)) {
+      return Result.failure("BORROW_LIMIT_REACHED(MAX_5_BOOKS_ALLOWED");
     }
     Book entity = book.get();
 
@@ -41,9 +41,14 @@ public class LibraryService {
 
     // Kontrollin, kas järjekord eksiteerib (muidu tekib NullException) ja kas järjekorras esimene isik on raamatut laenutada sooviv isik. Kui ei, siis
     // raamatut ei laenutata.
-    if (entity.getReservationQueue().size() > 0
-        && !entity.getReservationQueue().get(0).equals(memberId)) {
+    for (String member : entity.getReservationQueue()) {
+      if (!memberHasLessLoansThanMaxAllowed(member)) {
+        continue;
+      }
+      else if (entity.getReservationQueue().size() > 0
+        && !member.equals(memberId)) {
       return Result.failure("NOT_FIRST_IN_RESERVATION_QUEUE");
+      }   
     }
     entity.setLoanedTo(memberId);
 
@@ -67,6 +72,7 @@ public class LibraryService {
     }
 
     Book bookEntity = book.get();
+    List<String> bookReservationQueue = bookEntity.getReservationQueue();
     Member memberEntity = member.get();
 
     // Kontrollin, kas antud isik on hetkel raamatu laenutanud
@@ -75,10 +81,19 @@ public class LibraryService {
     }
     bookEntity.setLoanedTo(null);
     bookEntity.setDueDate(null);
-    String nextMember =
-        bookEntity.getReservationQueue().isEmpty() ? null : bookEntity.getReservationQueue().get(0);
+    String nextMember = null;
+    for (String loaner : bookReservationQueue) {
+      if (!memberHasLessLoansThanMaxAllowed(loaner)) {
+        continue;
+      }
+      else {
+        nextMember = bookEntity.getReservationQueue().isEmpty() ? null : loaner;
+        break;
+      }
+    }
     
-    // Kontrollin, kas järjekorras on järgmisi laenutajaid. Kui on, kutsun kohe välja laenutamise meetodi.
+    
+    // Kontrollin, kas järjekorras on järgmisi laenutajaid. Kui on, ja tema laenutuste limiit pole täis, kutsun kohe välja laenutamise meetodi.
     if (nextMember != null) {
       borrowBook(bookId, nextMember);
       return ResultWithNext.success(nextMember);
@@ -108,8 +123,8 @@ public class LibraryService {
       return Result.failure("BOOK_IS_ALREADY_BORROWED_BY_THIS_MEMBER");
     }
 
-    // Kui raamatule järjekorda pole ja raamat pole hetkel laenutatud, siis kutsun kohe välja laenutamise meetodi...
-    if (entity.getReservationQueue().isEmpty() && entity.getLoanedTo() == null) {
+    // Kui raamatule järjekorda pole ja raamat pole hetkel laenutatud, siis kutsun kohe välja laenutamise meetodi (juhul kui reserveerija laenutuste limiit pole täis)...
+    if (entity.getReservationQueue().isEmpty() && entity.getLoanedTo() == null && memberHasLessLoansThanMaxAllowed(memberId)) {
       borrowBook(bookId, memberId);
     } else {
 
@@ -139,17 +154,13 @@ public class LibraryService {
     return Result.success();
   }
 
-  public boolean canMemberBorrow(String memberId) {
-    if (!memberRepository.existsById(memberId)) {
-      return false;
-    }
-    int active = 0;
-    for (Book book : bookRepository.findAll()) {
-      if (memberId.equals(book.getLoanedTo())) {
-        active++;
-      }
-    }
-    return active < MAX_LOANS;
+  public boolean memberHasLessLoansThanMaxAllowed(String memberId) {
+    // memberId olemasolu pole vaja kontrollida, sest seda meetodit kasutab ainult meetod Borrow, kus on vastav kontroll juba eelnevalt tehtud
+
+    // Loon listi raamatutest, mille on laenanud isik id-ga 'memberId'
+    List<Book> booksLoanedToMember = searchBooks(null, null, memberId);
+
+    return booksLoanedToMember.size() < MAX_LOANS;
   }
 
   public List<Book> searchBooks(String titleContains, Boolean availableOnly, String loanedTo) {
