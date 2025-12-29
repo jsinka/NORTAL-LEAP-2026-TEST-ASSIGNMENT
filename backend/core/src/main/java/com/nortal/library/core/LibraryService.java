@@ -33,7 +33,22 @@ public class LibraryService {
       return Result.failure("BORROW_LIMIT");
     }
     Book entity = book.get();
+
+    // Kontrollin, kas antud isik on hetkel antud raamatu laenutaja. Kui on, siis raamatut ei laenutata.
+    if (entity.getLoanedTo() != null) {
+      return Result.failure("BOOK_BORROWED");
+    }
+
+    // Kontrollin, kas järjekord eksiteerib (muidu tekib NullException) ja kas järjekorras esimene isik on raamatut laenutada sooviv isik. Kui ei, siis
+    // raamatut ei laenutata.
+    if (entity.getReservationQueue().size() > 0
+        && !entity.getReservationQueue().get(0).equals(memberId)) {
+      return Result.failure("NOT_FIRST_IN_RESERVATION_QUEUE");
+    }
     entity.setLoanedTo(memberId);
+
+    // Välja laenutades eemaldan laenutaja järjekorrast.
+    entity.getReservationQueue().remove(memberId);
     entity.setDueDate(LocalDate.now().plusDays(DEFAULT_LOAN_DAYS));
     bookRepository.save(entity);
     return Result.success();
@@ -45,12 +60,30 @@ public class LibraryService {
       return ResultWithNext.failure();
     }
 
-    Book entity = book.get();
-    entity.setLoanedTo(null);
-    entity.setDueDate(null);
+    // Loon eraldi muutuja ja hiljem objekti Memberi jaoks, sest kasutan tema välju läbivalt meetodi loogikas.
+    Optional<Member> member = memberRepository.findById(memberId);
+    if (member.isEmpty()) {
+      return ResultWithNext.failure();
+    }
+
+    Book bookEntity = book.get();
+    Member memberEntity = member.get();
+
+    // Kontrollin, kas antud isik on hetkel raamatu laenutanud
+    if (!bookEntity.getLoanedTo().equals(memberEntity.getId())) {
+      return ResultWithNext.failure();
+    }
+    bookEntity.setLoanedTo(null);
+    bookEntity.setDueDate(null);
     String nextMember =
-        entity.getReservationQueue().isEmpty() ? null : entity.getReservationQueue().get(0);
-    bookRepository.save(entity);
+        bookEntity.getReservationQueue().isEmpty() ? null : bookEntity.getReservationQueue().get(0);
+    
+    // Kontrollin, kas järjekorras on järgmisi laenutajaid. Kui on, kutsun kohe välja laenutamise meetodi.
+    if (nextMember != null) {
+      borrowBook(bookId, nextMember);
+      return ResultWithNext.success(nextMember);
+    }
+    bookRepository.save(bookEntity);
     return ResultWithNext.success(nextMember);
   }
 
@@ -64,8 +97,27 @@ public class LibraryService {
     }
 
     Book entity = book.get();
-    entity.getReservationQueue().add(memberId);
-    bookRepository.save(entity);
+
+    // Kontrollin, kas antud isik on antud raamatu juba broneerinud
+    if (entity.getReservationQueue().contains(memberId)) {
+      return Result.failure("BOOK_IS_ALREADY_RESERVED_BY_THIS_MEMBER");
+    }
+
+    // Kontrollin, kas antud raamat on laenutatud (muidu tekib NullException) ja kas hetkel on laenutaja ja laenutada soovijad samad isikud
+    if (entity.getLoanedTo() != null && entity.getLoanedTo().equals(memberId)) {
+      return Result.failure("BOOK_IS_ALREADY_BORROWED_BY_THIS_MEMBER");
+    }
+
+    // Kui raamatule järjekorda pole ja raamat pole hetkel laenutatud, siis kutsun kohe välja laenutamise meetodi...
+    if (entity.getReservationQueue().isEmpty() && entity.getLoanedTo() == null) {
+      borrowBook(bookId, memberId);
+    } else {
+
+      // ...vastasel juhul lisan antud isiku järjekorda.
+      entity.getReservationQueue().add(memberId);
+      bookRepository.save(entity);
+    }
+
     return Result.success();
   }
 
